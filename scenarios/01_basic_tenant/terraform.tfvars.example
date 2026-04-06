@@ -1,0 +1,93 @@
+# =============================================================================
+# terraform.tfvars.example — Scenario 01 Basic Tenant
+#
+# 용도: 실제 tfvars 파일 작성을 위한 템플릿
+# 사용법:
+#   cp terraform.tfvars.example terraform.tfvars
+#   vi terraform.tfvars  (또는 VSCode에서 열기)
+#   → aci_password 값을 실제 비밀번호로 교체
+#
+# 주의:
+#   terraform.tfvars     → .gitignore 등록됨 (GitHub에 올라가지 않음)
+#   terraform.tfvars.example → GitHub에 커밋됨 (비밀번호 제외한 템플릿)
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# [1] APIC 접속 정보
+# -----------------------------------------------------------------------------
+
+# DevNet Always-On Sandbox 기본값
+# 세션 제한: 8시간 (공용 환경 — 타인과 공유됨)
+aci_url      = "https://sandboxapicdc.cisco.com"
+aci_username = "admin"
+
+# 실제 비밀번호로 교체 필요 (이 파일은 GitHub에 올리지 않음)
+aci_password = "REPLACE_WITH_YOUR_PASSWORD"
+
+# Sandbox는 자체 서명 인증서 사용 → true
+# 운영 환경(공인 인증서 적용된 APIC)은 false
+aci_insecure = true
+
+
+# -----------------------------------------------------------------------------
+# [2] Tenant / VRF
+# -----------------------------------------------------------------------------
+
+tenant_name        = "demo-tenant"
+tenant_description = "Scenario 01 - Basic Tenant"
+
+vrf_name        = "prod-vrf"
+vrf_description = "Production VRF"
+
+
+# -----------------------------------------------------------------------------
+# [3] Bridge Domain / Subnet
+#
+# ip 입력 규칙:
+#   ACI Subnet은 네트워크 주소가 아닌 게이트웨이 주소 입력
+#   예) 네트워크: 10.10.1.0/24 → 입력값: "10.10.1.1/24"
+#
+# scope 옵션:
+#   "private" → Tenant 내부 전용 (L3Out 미사용 환경)
+#   "public"  → L3Out으로 외부 라우터에 광고
+#   "shared"  → 다른 Tenant VRF와 공유 (Shared Services)
+# -----------------------------------------------------------------------------
+
+bd_name        = "web-bd"
+bd_description = "Web Bridge Domain"
+
+bd_subnets = [
+  {
+    ip          = "10.10.1.1/24"
+    scope       = ["private"]
+    description = "Web Subnet GW"
+  }
+]
+
+
+# -----------------------------------------------------------------------------
+# [4] Application Profile / EPG
+# -----------------------------------------------------------------------------
+
+ap_name        = "demo-ap"
+ap_description = "Demo Application Profile"
+
+epg_name        = "web-epg"
+epg_description = "Web EPG"
+
+
+# -----------------------------------------------------------------------------
+# [5] Contract
+#
+# contract_scope 옵션:
+#   "tenant"              → 동일 Tenant 내 EPG 간 (가장 일반적)
+#   "vrf"                 → 동일 VRF 내 EPG 간
+#   "global"              → Tenant 경계 초월
+#   "application-profile" → 동일 AP 내 EPG 간
+# -----------------------------------------------------------------------------
+
+contract_name        = "allow-http"
+contract_description = "Allow HTTP/HTTPS traffic"
+contract_scope       = "tenant"
+subject_name         = "http-subj"
