@@ -22,7 +22,7 @@ output "tenant_dn" {
 # =============================================================================
 output "vrf_dn" {
   description = "VRF DN (uni/tn-three-tier/ctx-app-vrf)"
-  value       = module.tenant.vrf_dn    # web_networking → tenant 로 변경
+  value       = module.tenant.vrf_dn # web_networking → tenant 로 변경
 }
 
 # =============================================================================
@@ -88,8 +88,8 @@ output "app_to_db_contract_dn" {
 output "scenario_summary" {
   description = "Scenario 02 구성 요약"
   value = {
-    tenant   = var.tenant_name
-    vrf      = var.vrf_name
+    tenant = var.tenant_name
+    vrf    = var.vrf_name
     tiers = {
       web = "${var.web_epg_name} (${var.web_subnet_ip})"
       app = "${var.app_epg_name} (${var.app_subnet_ip})"

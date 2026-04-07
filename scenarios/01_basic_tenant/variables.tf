@@ -40,7 +40,7 @@ variable "aci_password" {
   description = "APIC 로그인 비밀번호"
   # sensitive = true: plan/apply 출력 및 로그에서 값이 *** 로 마스킹됨
   # tfstate 파일에는 평문 저장되므로 운영 환경에서는 Remote State 암호화 필요
-  sensitive   = true
+  sensitive = true
 }
 
 variable "aci_insecure" {

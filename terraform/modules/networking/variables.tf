@@ -85,5 +85,5 @@ variable "subnets" {
     ip    : 게이트웨이 주소/prefix (호스트 IP가 아닌 GW IP 입력)
     scope : private(내부전용) | public(L3Out 광고) | shared(VRF 간 공유)
   EOT
-  default = []
+  default     = []
 }

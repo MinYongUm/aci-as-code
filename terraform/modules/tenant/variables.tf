@@ -28,7 +28,7 @@ variable "tenant_description" {
   type        = string
   description = "Tenant 설명 (APIC GUI Description 필드에 표시)"
   # default = "" → 빈 문자열: 설명을 생략해도 오류가 나지 않음 (선택 변수)
-  default     = ""
+  default = ""
 }
 
 

@@ -46,7 +46,7 @@ variable "create_ap" {
     Scenario 02 : web_epg만 true, app_epg·db_epg는 false
                   (AP 1개를 세 EPG가 공유하는 구조)
   EOT
-  default     = true   # 기본값 true → Scenario 01 기존 코드 영향 없음
+  default     = true # 기본값 true → Scenario 01 기존 코드 영향 없음
 }
 
 variable "existing_ap_dn" {
@@ -99,7 +99,7 @@ variable "contracts" {
       app-epg  → allow-web-to-app provider + allow-app-to-db consumer
       db-epg   → allow-app-to-db provider
   EOT
-  default = []
+  default     = []
 
   validation {
     # alltrue(): 리스트 안의 모든 조건이 true일 때만 통과

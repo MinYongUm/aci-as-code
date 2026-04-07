@@ -38,7 +38,7 @@ terraform {
 resource "aci_bridge_domain" "this" {
   # parent_dn: 이 BD가 속할 Tenant DN
   # 상위 모듈(tenant)의 output → 이 모듈의 variable로 전달받은 값
-  parent_dn   = var.tenant_dn 
+  parent_dn = var.tenant_dn
 
   name        = var.bd_name
   description = var.bd_description

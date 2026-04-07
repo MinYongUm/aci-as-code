@@ -24,8 +24,8 @@ terraform {
 # allow_insecure = true → DevNet Sandbox 자체 서명 인증서 허용
 # -----------------------------------------------------------------------------
 provider "aci" {
-  username      = var.aci_username
-  password      = var.aci_password
-  url           = var.aci_url
-  insecure      = true
+  username = var.aci_username
+  password = var.aci_password
+  url      = var.aci_url
+  insecure = true
 }
