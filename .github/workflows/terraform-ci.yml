@@ -1,0 +1,181 @@
+# =============================================================================
+# GitHub Actions Workflow: Terraform CI
+# 파일: .github/workflows/terraform-ci.yml
+#
+# 트리거:
+#   - PR → main 브랜치 (terraform/ 또는 scenarios/ 변경 시)
+#   - main 브랜치 push (동일 경로 변경 시)
+#
+# 실행 단계:
+#   1. fmt check   → HCL 포맷 오류 감지 (terraform fmt -check)
+#   2. init        → Provider 다운로드 (CiscoDevNet/aci v2.18)
+#   3. validate    → 문법 오류 감지 (APIC 연결 불필요)
+#   4. plan        → 실제 APIC에 연결하여 변경 계획 출력
+#
+# GitHub Secrets 필요:
+#   ACI_URL      : https://sandboxapicdc.cisco.com
+#   ACI_USERNAME : admin
+#   ACI_PASSWORD : (실제 비밀번호)
+#
+# 참고:
+#   - terraform.tfvars는 .gitignore 처리됨 → Secrets에서 TF_VAR_* 환경변수로 주입
+#   - TF_VAR_{변수명} 형식으로 설정하면 variables.tf의 변수에 자동 매핑됨
+# =============================================================================
+
+name: Terraform CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      # terraform/ 또는 scenarios/ 하위 파일 변경 시에만 트리거
+      - 'terraform/**'
+      - 'scenarios/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'scenarios/**'
+
+# 동일 PR에 여러 커밋이 올라올 경우 이전 실행을 취소하고 최신만 유지
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job: terraform-fmt-check
+  # 역할: 전체 프로젝트의 HCL 포맷 일관성 검사
+  #       문제 발견 시 어떤 파일이 포맷 오류인지 출력
+  # ---------------------------------------------------------------------------
+  fmt-check:
+    name: Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      # -recursive: 하위 디렉토리 모두 포함
+      # -check:     수정하지 않고 오류만 감지 (비대화형 CI 환경)
+      # -diff:      어떤 부분이 다른지 diff로 출력
+      - name: Terraform Format Check
+        run: terraform fmt -recursive -check -diff
+        working-directory: .
+
+  # ---------------------------------------------------------------------------
+  # Job: terraform-validate-plan
+  # 역할: 각 시나리오에 대해 validate → plan 실행
+  #       matrix strategy로 Scenario 01, 02 병렬 실행
+  # ---------------------------------------------------------------------------
+  validate-and-plan:
+    name: "Validate & Plan — Scenario ${{ matrix.scenario }}"
+    runs-on: ubuntu-latest
+    needs: fmt-check  # fmt 통과 후에만 실행
+
+    strategy:
+      # fail-fast: false → 하나의 시나리오 실패해도 나머지는 계속 실행
+      fail-fast: false
+      matrix:
+        scenario:
+          - "01_basic_tenant"
+          - "02_three_tier_app"
+
+    # Terraform variables.tf에 정의된 변수는 TF_VAR_{변수명} 환경변수로 주입
+    # GitHub Secrets → TF_VAR_* 환경변수 → variables.tf 변수 자동 매핑
+    env:
+      TF_VAR_aci_url:      ${{ secrets.ACI_URL }}
+      TF_VAR_aci_username: ${{ secrets.ACI_USERNAME }}
+      TF_VAR_aci_password: ${{ secrets.ACI_PASSWORD }}
+      TF_VAR_aci_insecure: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+          # wrap_terraform_output_in_format: plan 출력을 GitHub PR에서 보기 좋게 렌더링
+          terraform_wrapper: true
+
+      # -----------------------------------------------------------------------
+      # Step 1: Terraform Init
+      # Provider(CiscoDevNet/aci v2.18)를 다운로드
+      # -input=false: 대화형 입력 비활성화 (CI 환경 필수)
+      # -----------------------------------------------------------------------
+      - name: Terraform Init
+        working-directory: scenarios/${{ matrix.scenario }}
+        run: terraform init -input=false
+
+      # -----------------------------------------------------------------------
+      # Step 2: Terraform Validate
+      # APIC 연결 없이 문법/참조 오류 감지
+      # variables.tf, outputs.tf, 모듈 참조 유효성 확인
+      # -----------------------------------------------------------------------
+      - name: Terraform Validate
+        working-directory: scenarios/${{ matrix.scenario }}
+        run: terraform validate
+
+      # -----------------------------------------------------------------------
+      # Step 3: Terraform Plan
+      # 실제 APIC(DevNet Sandbox)에 연결하여 변경 계획 생성
+      # -input=false: 대화형 입력 비활성화
+      # -no-color:    GitHub Actions 로그에서 ANSI 색상 제거 (가독성)
+      # -out=tfplan:  plan 결과를 파일로 저장 (향후 apply 자동화 시 사용)
+      # -----------------------------------------------------------------------
+      - name: Terraform Plan
+        id: plan
+        working-directory: scenarios/${{ matrix.scenario }}
+        run: terraform plan -input=false -no-color -out=tfplan
+        # plan 실패해도 PR 코멘트 step을 실행하기 위해 continue-on-error
+        continue-on-error: true
+
+      # -----------------------------------------------------------------------
+      # Step 4: PR에 Plan 결과 코멘트
+      # PR 리뷰어가 코드 변경 없이 plan 결과를 바로 확인 가능
+      # github.event_name == 'pull_request' 조건: push 이벤트에선 코멘트 생략
+      # -----------------------------------------------------------------------
+      - name: Post Plan Result to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const scenario = '${{ matrix.scenario }}';
+            const planOutcome = '${{ steps.plan.outcome }}';
+            const output = `### Terraform Plan — Scenario \`${scenario}\`
+
+            **Result:** ${planOutcome === 'success' ? '✅ Plan succeeded' : '❌ Plan failed'}
+
+            <details>
+            <summary>Show Plan Output</summary>
+
+            \`\`\`
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+
+            </details>
+
+            > 실행 환경: DevNet Always-On Sandbox
+            > 커밋: \`${{ github.sha }}\``;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      # plan이 실패한 경우 Job 전체를 실패 처리
+      - name: Check Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
