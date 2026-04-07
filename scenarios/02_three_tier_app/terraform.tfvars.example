@@ -1,0 +1,50 @@
+# =============================================================================
+# terraform.tfvars.example — Scenario 02: Three-Tier App
+# =============================================================================
+# 사용법:
+#   cp terraform.tfvars.example terraform.tfvars
+#   vi terraform.tfvars   # 실제 값으로 수정
+#
+# ⚠ 주의:
+#   - terraform.tfvars는 .gitignore에 포함되어 있어 Git에 push되지 않는다.
+#   - 이 파일(*.example)만 Git에 push한다.
+#   - 변수명은 variables.tf의 variable 블록명과 반드시 일치해야 한다.
+# =============================================================================
+
+# APIC 접속 정보
+aci_url      = "https://sandboxapicdc.cisco.com"
+aci_username = "admin"
+aci_password = "your-password-here"
+
+# Tenant / VRF (기본값 사용 시 생략 가능)
+tenant_name        = "three-tier"
+tenant_description = "Three-Tier Application Tenant - Scenario 02"
+vrf_name           = "app-vrf"
+
+# Application Profile
+ap_name = "three-tier-ap"
+
+# Web Tier
+web_bd_name   = "web-bd"
+web_subnet_ip = "10.10.1.1/24"
+web_epg_name  = "web-epg"
+
+# App Tier
+app_bd_name   = "app-bd"
+app_subnet_ip = "10.10.2.1/24"
+app_epg_name  = "app-epg"
+
+# DB Tier
+db_bd_name   = "db-bd"
+db_subnet_ip = "10.10.3.1/24"
+db_epg_name  = "db-epg"
+
+# Contract: Web→App
+web_to_app_contract_name = "allow-web-to-app"
+web_to_app_filter_name   = "filter-web-app"
+web_to_app_port          = "8080"
+
+# Contract: App→DB
+app_to_db_contract_name = "allow-app-to-db"
+app_to_db_filter_name   = "filter-app-db"
+app_to_db_port          = "3306"
