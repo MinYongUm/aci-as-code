@@ -1,0 +1,158 @@
+---
+# =============================================================================
+# Role: aci_epg
+# 파일: tasks/main.yml
+# 역할: Application Profile, EPG를 생성하고 Contract를 바인딩한다
+#
+# ACI 오브젝트:
+#   Application Profile (fvAp)  → EPG를 묶는 논리적 컨테이너 (앱 단위 구분)
+#   └── EPG (fvAEPg)            → 동일 정책을 적용받는 엔드포인트 그룹
+#       ├── BD 연결              → EPG가 사용할 L2/L3 도메인 지정
+#       └── Contract 바인딩     → EPG 간 허용 트래픽 정책 연결
+#
+# DN 경로:
+#   AP  → uni/tn-{tenant}/ap-{name}
+#   EPG → uni/tn-{tenant}/ap-{ap}/epg-{name}
+#
+# Terraform 모듈 비교:
+#   terraform/modules/epg/main.tf 의
+#   aci_application_profile + aci_application_epg + aci_epg_to_contract
+#
+# 실무 비유:
+#   Application Profile = 3계층 웹 앱 전체 (web + app + db 묶음)
+#   EPG                 = 각 계층 (web 서버들 / app 서버들 / db 서버들)
+#   Contract            = EPG 간 방화벽 정책 (web→app 8080 허용)
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Task 1: Application Profile 생성
+# Cisco ACI 모듈: cisco.aci.aci_ap (ACI 오브젝트: fvAp)
+#
+# Terraform 대응:
+#   resource "aci_application_profile" "this" {
+#     parent_dn   = var.tenant_dn   ← v2.18 최신 속성 (tenant_dn deprecated)
+#     name        = var.ap_name
+#     description = var.ap_description
+#   }
+# -----------------------------------------------------------------------------
+- name: "Application Profile 생성 | fvAp: {{ ap_name }} (Tenant: {{ tenant_name }})"
+  cisco.aci.aci_ap:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant: "{{ tenant_name }}"
+    ap:     "{{ ap_name }}"
+    description: "{{ ap_description }}"
+
+    state: "{{ aci_state }}"
+
+  register: ap_result
+
+
+# -----------------------------------------------------------------------------
+# Task 2: EPG 생성 및 BD 연결
+# Cisco ACI 모듈: cisco.aci.aci_epg (ACI 오브젝트: fvAEPg)
+#
+# Terraform 대응:
+#   resource "aci_application_epg" "this" {
+#     application_profile_dn = aci_application_profile.this.id
+#     name                   = var.epg_name
+#     relation_fv_rs_bd      = var.bd_dn   ← BD 연결 (Warning 수준, 동작은 함)
+#   }
+#
+# 핵심 차이:
+#   Terraform: relation_fv_rs_bd = var.bd_dn (전체 DN 문자열)
+#   Ansible:   bd: "{{ bd_name }}" (이름만 입력 → 모듈이 DN 자동 생성)
+#              → 코드가 더 간결하지만, 동일 Tenant 내 BD만 연결 가능
+# -----------------------------------------------------------------------------
+- name: "EPG 생성 | fvAEPg: {{ epg_name }} (AP: {{ ap_name }}, BD: {{ bd_name }})"
+  cisco.aci.aci_epg:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant: "{{ tenant_name }}"
+    ap:     "{{ ap_name }}"
+    epg:    "{{ epg_name }}"
+    description: "{{ epg_description }}"
+
+    # BD 연결: EPG는 반드시 BD에 연결되어야 L2/L3 통신 가능
+    # Terraform: relation_fv_rs_bd (전체 DN)
+    # Ansible:   bd (이름만 입력, 모듈이 DN 자동 처리)
+    bd: "{{ bd_name }}"
+
+    state: "{{ aci_state }}"
+
+  register: epg_result
+
+
+# -----------------------------------------------------------------------------
+# Task 3: EPG Contract 바인딩 (반복)
+# Cisco ACI 모듈: cisco.aci.aci_epg_to_contract
+#                  (ACI 오브젝트: fvRsProv / fvRsCons)
+#
+# Terraform 대응:
+#   resource "aci_epg_to_contract" "this" {
+#     for_each = {
+#       for idx, c in var.contracts : "${c.contract_type}_${idx}" => c
+#     }
+#     application_epg_dn = aci_application_epg.this.id
+#     contract_dn        = each.value.contract_dn
+#     contract_type      = each.value.contract_type
+#   }
+#
+# ACI Contract 방향 개념:
+#   Provider → 서비스를 제공하는 EPG (서버 역할, 트래픽을 "받는" 쪽)
+#   Consumer → 서비스를 소비하는 EPG (클라이언트 역할, 트래픽을 "보내는" 쪽)
+#
+#   Scenario 01: web-epg가 Provider + Consumer 동시 설정 (단일 EPG)
+#   Scenario 02: web-epg(Consumer) ↔ app-epg(Provider) 분리 구성
+#
+# loop 변수 (group_vars/all.yml의 epg_contracts):
+#   - { contract: "allow-http", contract_type: "provider" }
+#   - { contract: "allow-http", contract_type: "consumer" }
+# -----------------------------------------------------------------------------
+- name: "Contract 바인딩 | {{ item.contract_type | upper }}: {{ epg_name }} ↔ {{ item.contract }}"
+  cisco.aci.aci_epg_to_contract:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant:   "{{ tenant_name }}"
+    ap:       "{{ ap_name }}"
+    epg:      "{{ epg_name }}"
+
+    # 연결할 Contract 이름
+    # Terraform: contract_dn (전체 DN) 입력
+    # Ansible:   contract (이름만) 입력 → 모듈이 DN 자동 처리
+    contract: "{{ item.contract }}"
+
+    # contract_type: provider(서버) | consumer(클라이언트)
+    contract_type: "{{ item.contract_type }}"
+
+    state: "{{ aci_state }}"
+
+  loop: "{{ epg_contracts }}"
+  loop_control:
+    label: "{{ item.contract_type }}: {{ item.contract }}"
+
+  register: epg_contract_result
+
+
+# -----------------------------------------------------------------------------
+# Task 4: 생성 결과 출력
+# -----------------------------------------------------------------------------
+- name: "생성 결과 확인 | EPG DN"
+  ansible.builtin.debug:
+    msg:
+      - "AP  DN : uni/tn-{{ tenant_name }}/ap-{{ ap_name }}"
+      - "EPG DN : uni/tn-{{ tenant_name }}/ap-{{ ap_name }}/epg-{{ epg_name }}"
+      - "Contract 바인딩:"
+      - "  - Provider: uni/tn-{{ tenant_name }}/brc-{{ contract_name }}"
+      - "  - Consumer: uni/tn-{{ tenant_name }}/brc-{{ contract_name }}"
+  when: aci_state == "present"

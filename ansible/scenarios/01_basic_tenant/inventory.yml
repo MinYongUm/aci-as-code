@@ -1,0 +1,22 @@
+---
+# =============================================================================
+# Scenario 01 — Basic Tenant
+# 파일: inventory.yml
+# 역할: Ansible이 접속할 대상(APIC)을 정의한다
+#
+# Ansible ACI 모듈의 접속 방식:
+#   - ACI 모듈은 SSH가 아닌 HTTPS REST API로 APIC에 직접 접속
+#   - 따라서 실제 인벤토리 호스트는 "localhost" (Ansible 실행 머신 자신)
+#   - APIC 접속 정보는 모듈 파라미터(host/username/password)로 전달
+#   - connection: local → SSH 연결 없이 로컬에서 API 호출
+#
+# Terraform과의 차이:
+#   Terraform: provider "aci" { url = ... } 블록에 APIC 정보 한 번 선언
+#   Ansible:   각 태스크의 모듈 파라미터로 APIC 정보 전달 (group_vars로 중앙화)
+# =============================================================================
+
+all:
+  hosts:
+    # APIC REST API 호출은 로컬에서 실행 → localhost를 대상으로 지정
+    localhost:
+      ansible_connection: local

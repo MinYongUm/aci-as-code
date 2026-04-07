@@ -1,0 +1,29 @@
+---
+- name: "Tenant 생성 | fvTenant: {{ tenant_name }}"
+  cisco.aci.aci_tenant:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+    tenant:      "{{ tenant_name }}"
+    description: "{{ tenant_description }}"
+    state: "{{ aci_state }}"
+
+- name: "VRF 생성 | fvCtx: {{ vrf_name }}"
+  cisco.aci.aci_vrf:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+    tenant:      "{{ tenant_name }}"
+    vrf:         "{{ vrf_name }}"
+    description: "{{ vrf_description }}"
+    policy_control_preference: "{{ vrf_enforcement }}"
+    state: "{{ aci_state }}"
+
+- name: "결과 확인"
+  ansible.builtin.debug:
+    msg:
+      - "Tenant DN : uni/tn-{{ tenant_name }}"
+      - "VRF    DN : uni/tn-{{ tenant_name }}/ctx-{{ vrf_name }}"
+  when: aci_state == "present"

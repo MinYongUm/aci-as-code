@@ -1,0 +1,129 @@
+---
+# =============================================================================
+# Scenario 01 — Basic Tenant
+# 파일: group_vars/all.yml
+# 역할: 플레이북 전체에서 공유하는 변수를 정의한다
+#
+# 변수 우선순위 (낮음 → 높음):
+#   role defaults → group_vars → host_vars → extra_vars (-e)
+#
+# 민감 정보 처리:
+#   aci_password → group_vars/vault.yml에 분리 (ansible-vault 암호화)
+#   이 파일(all.yml)에는 비밀번호 절대 기입 금지
+#
+# Terraform tfvars와의 비교:
+#   terraform.tfvars → group_vars/all.yml + group_vars/vault.yml
+#   sensitive = true → vault.yml + ansible-vault encrypt
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# [1] APIC 접속 정보
+#     aci_password는 vault.yml에 정의 (이 파일에 작성 금지)
+# -----------------------------------------------------------------------------
+
+# DevNet Always-On Sandbox 기본값
+aci_host:          sandboxapicdc.cisco.com
+aci_username:      admin
+aci_validate_certs: false  # Sandbox 자체 서명 인증서 → false
+
+# aci_password: vault.yml에서 로드됨 (ansible-vault encrypt_string)
+
+
+# -----------------------------------------------------------------------------
+# [2] Tenant / VRF
+# -----------------------------------------------------------------------------
+
+tenant_name:        demo-tenant
+tenant_description: "Scenario 01 - Basic Tenant"
+
+vrf_name:           prod-vrf
+vrf_description:    "Production VRF"
+
+# VRF Policy Enforcement
+# enforced   → Contract 없으면 EPG 간 통신 차단 (운영 환경 권장)
+# unenforced → Contract 없어도 EPG 간 통신 허용 (개발/테스트)
+vrf_enforcement: enforced
+
+
+# -----------------------------------------------------------------------------
+# [3] Bridge Domain / Subnet
+# -----------------------------------------------------------------------------
+
+bd_name:        web-bd
+bd_description: "Web Bridge Domain"
+
+# unicast_route: L3 유니캐스트 라우팅 활성화 (ACI BD의 SVI 역할)
+#   Terraform: unicast_route = "yes"
+#   Ansible:   enable_routing: true
+bd_enable_routing: true
+
+# arp_flood: ARP 플러딩 vs ARP Proxy
+#   Terraform: arp_flood = "no"
+#   Ansible:   arp_flooding: false
+bd_arp_flooding: false
+
+# BD에 연결할 Subnet 목록
+# Terraform: list(object)로 정의
+# Ansible:   YAML 리스트로 정의 → aci_bd_subnet 루프에서 사용
+bd_subnets:
+  - gateway: "10.10.1.1"   # 게이트웨이 IP (prefix 제외)
+    mask: "24"              # prefix 길이
+    scope: private          # private | public | shared
+    description: "Web Subnet GW"
+
+
+# -----------------------------------------------------------------------------
+# [4] Application Profile / EPG
+# -----------------------------------------------------------------------------
+
+ap_name:        demo-ap
+ap_description: "Demo Application Profile"
+
+epg_name:        web-epg
+epg_description: "Web EPG"
+
+
+# -----------------------------------------------------------------------------
+# [5] Contract
+# -----------------------------------------------------------------------------
+
+contract_name:        allow-http
+contract_description: "Allow HTTP/HTTPS traffic"
+
+# Contract 적용 범위
+# tenant | vrf | global | application-profile
+contract_scope: tenant
+
+subject_name:        http-subj
+subject_description: "HTTP/HTTPS Subject"
+
+# Filter 및 Entry 정의
+# Terraform: map(object({ entries = list(object) }))
+# Ansible:   YAML 리스트 → 중첩 루프(with_subelements / nested loop)에서 사용
+filters:
+  - name: filter-http
+    description: "HTTP and HTTPS Filter"
+    entries:
+      - name: tcp-80
+        ether_type:    ip       # IPv4 트래픽
+        ip_protocol:   tcp      # TCP 프로토콜
+        dst_port_start: http    # Named port: 80
+        dst_port_end:   http    # 단일 포트 → start = end
+        description:   "Allow TCP port 80 (HTTP)"
+
+      - name: tcp-443
+        ether_type:    ip
+        ip_protocol:   tcp
+        dst_port_start: https   # Named port: 443
+        dst_port_end:   https
+        description:   "Allow TCP port 443 (HTTPS)"
+
+# EPG Contract 바인딩 정의
+# Terraform: contracts = [ { contract_dn, contract_type } ]
+# Ansible:   epg_contracts 리스트 → aci_epg_to_contract 루프
+epg_contracts:
+  - contract: "{{ contract_name }}"
+    contract_type: provider   # 서버 역할: HTTP/HTTPS 트래픽을 받는 EPG
+  - contract: "{{ contract_name }}"
+    contract_type: consumer   # 클라이언트 역할: Contract 규칙을 보내는 EPG

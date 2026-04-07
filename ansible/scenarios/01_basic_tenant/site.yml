@@ -1,0 +1,90 @@
+---
+# =============================================================================
+# Scenario 01 — Basic Tenant
+# 파일: site.yml
+# 역할: 4개 Role을 순서대로 호출하여 ACI 오브젝트 전체를 프로비저닝한다
+#
+# 실행 순서 (Role 적용 순서로 제어 — Terraform과의 핵심 차이):
+#   1. aci_tenant     → Tenant + VRF 생성
+#   2. aci_policy     → Filter + Contract 생성
+#   3. aci_networking → BD + Subnet 생성
+#   4. aci_epg        → AP + EPG + Contract 바인딩
+#
+# Terraform vs Ansible 순서 제어 방식:
+#   Terraform: 리소스 간 참조(module.tenant.tenant_dn)로 의존성 그래프 자동 생성
+#   Ansible:   roles 나열 순서로 실행 순서를 직접 제어 (명시적, 절차적)
+#
+# 실행 명령어:
+#   # Dry-run (변경 없이 확인)
+#   ansible-playbook -i inventory.yml site.yml --check --diff --ask-vault-pass
+#
+#   # 실제 적용
+#   ansible-playbook -i inventory.yml site.yml --ask-vault-pass
+#
+#   # 특정 Role만 실행 (태그 활용)
+#   ansible-playbook -i inventory.yml site.yml --tags tenant --ask-vault-pass
+#   ansible-playbook -i inventory.yml site.yml --tags "policy,networking" --ask-vault-pass
+#
+#   # 삭제 (state=absent 변수 오버라이드)
+#   ansible-playbook -i inventory.yml site.yml -e "aci_state=absent" --ask-vault-pass
+# =============================================================================
+
+- name: "Scenario 01 — ACI Basic Tenant Provisioning"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # vars_files: group_vars/ 아래 파일은 자동 로드되므로 명시 생략 가능
+  # vault.yml이 암호화된 경우 --ask-vault-pass 옵션 필요
+
+  vars:
+    # aci_state: 모든 Role에서 공통으로 사용하는 상태값
+    # present → 오브젝트 생성/유지
+    # absent  → 오브젝트 삭제 (실행 시 -e "aci_state=absent"로 오버라이드)
+    #
+    # Terraform 비교:
+    #   terraform apply   → aci_state: present
+    #   terraform destroy → aci_state: absent (단, Ansible은 삭제 순서를 직접 제어해야 함)
+    aci_state: present
+
+  roles:
+    # -----------------------------------------------------------------------
+    # Role 1: aci_tenant
+    # 생성 오브젝트: Tenant(fvTenant) + VRF(fvCtx)
+    # 모든 ACI 오브젝트의 최상위 컨테이너 → 가장 먼저 생성
+    # -----------------------------------------------------------------------
+    - role: aci_tenant
+      tags:
+        - tenant
+        - always  # --tags 없이 실행 시에도 항상 포함
+
+    # -----------------------------------------------------------------------
+    # Role 2: aci_policy
+    # 생성 오브젝트: Filter(vzFilter) + Entry(vzEntry) + Contract(vzBrCP) + Subject(vzSubj)
+    # EPG 바인딩 전에 Contract가 존재해야 함 → 2번째 실행
+    #
+    # Terraform과의 순서 차이:
+    #   Terraform: module.policy의 output을 module.epg가 참조 → 자동 순서 보장
+    #   Ansible:   roles 목록에서 aci_policy를 aci_epg보다 앞에 배치 → 명시적 순서
+    # -----------------------------------------------------------------------
+    - role: aci_policy
+      tags:
+        - policy
+
+    # -----------------------------------------------------------------------
+    # Role 3: aci_networking
+    # 생성 오브젝트: Bridge Domain(fvBD) + Subnet(fvSubnet)
+    # EPG가 BD를 참조하므로 BD가 먼저 존재해야 함 → 3번째 실행
+    # -----------------------------------------------------------------------
+    - role: aci_networking
+      tags:
+        - networking
+
+    # -----------------------------------------------------------------------
+    # Role 4: aci_epg
+    # 생성 오브젝트: AP(fvAp) + EPG(fvAEPg) + Contract 바인딩
+    # Tenant/BD/Contract 모두 존재 후 실행 → 마지막
+    # -----------------------------------------------------------------------
+    - role: aci_epg
+      tags:
+        - epg

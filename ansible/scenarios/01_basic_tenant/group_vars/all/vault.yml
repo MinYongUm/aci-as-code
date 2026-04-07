@@ -1,0 +1,35 @@
+---
+# =============================================================================
+# Scenario 01 — Basic Tenant
+# 파일: group_vars/vault.yml
+# 역할: 민감 변수(비밀번호)를 ansible-vault로 암호화하여 관리한다
+#
+# 현재 상태: 평문 예시 파일 (실제 운영 시 암호화 필수)
+#
+# ansible-vault 사용 방법:
+#
+# [방법 1] 파일 전체 암호화 (권장)
+#   ansible-vault encrypt group_vars/vault.yml
+#   ansible-vault decrypt group_vars/vault.yml
+#   ansible-vault edit    group_vars/vault.yml
+#
+# [방법 2] 특정 값만 암호화 (inline encrypt)
+#   ansible-vault encrypt_string '!v3G@!4@Y' --name 'aci_password'
+#   → 출력된 !vault | 블록을 이 파일에 붙여넣기
+#
+# 플레이북 실행 시 vault 비밀번호 입력:
+#   ansible-playbook site.yml --ask-vault-pass
+#   ansible-playbook site.yml --vault-password-file ~/.vault_pass
+#
+# .gitignore 처리:
+#   vault.yml (실제 암호화 파일) → .gitignore에 추가 권장
+#   vault.yml.example            → Git에 커밋 (비밀번호 제외 템플릿)
+#
+# Terraform 비교:
+#   terraform.tfvars (sensitive) → vault.yml + ansible-vault
+#   terraform plan 시 *** 마스킹  → Ansible은 no_log: true로 로그 마스킹
+# =============================================================================
+
+# APIC 로그인 비밀번호
+# 실제 사용 시 이 값을 ansible-vault로 암호화할 것
+aci_password: "!v3G@!4@Y"

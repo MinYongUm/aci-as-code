@@ -1,0 +1,248 @@
+---
+# =============================================================================
+# Role: aci_policy
+# 파일: tasks/main.yml
+# 역할: Filter, Contract, Subject를 생성한다 (ACI 트래픽 정책)
+#
+# ACI 오브젝트 계층:
+#   Contract (vzBrCP)           → 허용 트래픽 정책의 최상위 단위
+#   └── Subject (vzSubj)        → Contract 안의 세부 규칙 묶음
+#       └── Filter (vzFilter)   → 실제 트래픽 매칭 조건
+#           └── Entry (vzEntry) → 프로토콜/포트 단위의 개별 규칙
+#
+# DN 경로:
+#   Filter   → uni/tn-{tenant}/flt-{name}
+#   Entry    → uni/tn-{tenant}/flt-{filter}/e-{name}
+#   Contract → uni/tn-{tenant}/brc-{name}
+#   Subject  → uni/tn-{tenant}/brc-{contract}/subj-{name}
+#
+# Terraform 모듈 비교:
+#   terraform/modules/policy/main.tf 의 aci_filter + aci_filter_entry
+#                                       + aci_contract + aci_contract_subject
+#
+# 실무 비유:
+#   Contract = 방화벽 정책 그룹 (allow-http)
+#   Subject  = 정책 그룹 내 규칙 묶음 (http-subj)
+#   Filter   = ACL 조건 정의 (filter-http)
+#   Entry    = 실제 ACE (tcp dst 80, tcp dst 443)
+#
+# 중첩 루프 전략 (Terraform locals.filter_entries와 동일한 목적):
+#   Terraform: flatten([for filter : [for entry : { filter_name, entry }]])
+#   Ansible:   include_tasks로 필터별 서브태스크 호출 + loop
+#              → subelements 필터로 filter × entry 조합 생성
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Task 1: Filter 생성
+# Cisco ACI 모듈: cisco.aci.aci_filter (ACI 오브젝트: vzFilter)
+#
+# Terraform 대응:
+#   resource "aci_filter" "this" {
+#     for_each    = var.filters          ← 맵 키로 반복
+#     tenant_dn   = var.tenant_dn
+#     name        = each.key
+#     description = each.value.description
+#   }
+# -----------------------------------------------------------------------------
+- name: "Filter 생성 | vzFilter: {{ item.name }} (Tenant: {{ tenant_name }})"
+  cisco.aci.aci_filter:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant: "{{ tenant_name }}"
+    filter: "{{ item.name }}"
+    description: "{{ item.description }}"
+
+    state: "{{ aci_state }}"
+
+  loop: "{{ filters }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+  register: filter_result
+
+
+# -----------------------------------------------------------------------------
+# Task 2: Filter Entry 생성 (중첩 루프)
+# Cisco ACI 모듈: cisco.aci.aci_filter_entry (ACI 오브젝트: vzEntry)
+#
+# Terraform 대응:
+#   resource "aci_filter_entry" "this" {
+#     for_each    = { for fe in local.filter_entries : "${fe.filter_name}__${fe.entry_name}" => fe }
+#     filter_dn   = aci_filter.this[each.value.filter_name].id
+#     name        = each.value.entry_name
+#     ether_t     = each.value.ether_t
+#     prot        = each.value.ip_proto   ← v2.18: ip_proto → prot
+#     d_from_port = each.value.d_from_port
+#     d_to_port   = each.value.d_to_port
+#   }
+#
+# 중첩 루프 구현:
+#   Terraform: flatten() + for 표현식으로 filter × entry 조합 일괄 생성
+#   Ansible:   subelements 필터를 사용해 동일한 조합 구현
+#              subelements(filters, 'entries') →
+#              [ [filter_dict, entry_dict], [filter_dict, entry_dict], ... ]
+#
+# subelements 사용 예시 (group_vars/all.yml의 filters 기준):
+#   item.0 = { name: "filter-http", description: "...", entries: [...] }
+#   item.1 = { name: "tcp-80", ether_type: "ip", ... }
+# -----------------------------------------------------------------------------
+- name: "Filter Entry 생성 | vzEntry: {{ item.1.name }} (Filter: {{ item.0.name }})"
+  cisco.aci.aci_filter_entry:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant:       "{{ tenant_name }}"
+    filter:       "{{ item.0.name }}"       # 부모 Filter 이름 (item.0)
+    filter_entry: "{{ item.1.name }}"       # Entry 이름 (item.1)
+
+    # ether_type: Ethernet 타입 (L3 프로토콜)
+    #   ip → IPv4 (tcp/udp/icmp 사용 시 지정)
+    #   arp, fcoe, mac_security, trill, unspecified
+    # Terraform: ether_t 속성명
+    # Ansible:   ether_type 속성명 (모듈 파라미터명 다름)
+    ether_type: "{{ item.1.ether_type }}"
+
+    # ip_protocol: IP 프로토콜
+    #   tcp | udp | icmp | eigrp | egp | igmp | ospfigp | pim | unspecified
+    # Terraform: prot 속성명 (v2.18: ip_proto → prot 로 변경됨)
+    # Ansible:   ip_protocol 속성명 (Terraform prot와 다름, 혼동 주의)
+    ip_protocol: "{{ item.1.ip_protocol }}"
+
+    # dst_port_start / dst_port_end: 목적지 포트 범위
+    #   숫자: "80", "443", "3306"
+    #   Named port: "http"(80), "https"(443), "dns"(53), "ftp"(21)
+    #   단일 포트: dst_port_start = dst_port_end
+    # Terraform: d_from_port / d_to_port
+    # Ansible:   dst_port_start / dst_port_end (이름 다름)
+    dst_port_start: "{{ item.1.dst_port_start }}"
+    dst_port_end:   "{{ item.1.dst_port_end }}"
+
+    description: "{{ item.1.description }}"
+    state: "{{ aci_state }}"
+
+  # subelements: YAML 중첩 구조를 평탄화(flatten)하는 Jinja2 필터
+  # Terraform의 flatten([for filter : [for entry : ...]]) 와 동일한 역할
+  loop: "{{ filters | subelements('entries') }}"
+  loop_control:
+    label: "{{ item.0.name }}/{{ item.1.name }}"
+
+  register: filter_entry_result
+
+
+# -----------------------------------------------------------------------------
+# Task 3: Contract 생성
+# Cisco ACI 모듈: cisco.aci.aci_contract (ACI 오브젝트: vzBrCP)
+#
+# Terraform 대응:
+#   resource "aci_contract" "this" {
+#     tenant_dn   = var.tenant_dn
+#     name        = var.contract_name
+#     scope       = var.contract_scope
+#   }
+# -----------------------------------------------------------------------------
+- name: "Contract 생성 | vzBrCP: {{ contract_name }} (scope: {{ contract_scope }})"
+  cisco.aci.aci_contract:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant:      "{{ tenant_name }}"
+    contract:    "{{ contract_name }}"
+    description: "{{ contract_description }}"
+
+    # scope: Contract 적용 범위
+    #   tenant              → 동일 Tenant 내 EPG 간 (가장 일반적)
+    #   vrf                 → 동일 VRF 내 EPG 간
+    #   global              → Tenant 경계 초월 (공용 서비스)
+    #   application-profile → 동일 AP 내 EPG 간
+    scope: "{{ contract_scope }}"
+
+    state: "{{ aci_state }}"
+
+  register: contract_result
+
+
+# -----------------------------------------------------------------------------
+# Task 4: Contract Subject 생성
+# Cisco ACI 모듈: cisco.aci.aci_contract_subject (ACI 오브젝트: vzSubj)
+#
+# Terraform 대응:
+#   resource "aci_contract_subject" "this" {
+#     contract_dn = aci_contract.this.id
+#     name        = var.subject_name
+#   }
+# -----------------------------------------------------------------------------
+- name: "Subject 생성 | vzSubj: {{ subject_name }} (Contract: {{ contract_name }})"
+  cisco.aci.aci_contract_subject:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant:      "{{ tenant_name }}"
+    contract:    "{{ contract_name }}"
+    subject:     "{{ subject_name }}"
+    description: "{{ subject_description }}"
+
+    state: "{{ aci_state }}"
+
+  register: subject_result
+
+
+# -----------------------------------------------------------------------------
+# Task 5: Subject → Filter 연결
+# Cisco ACI 모듈: cisco.aci.aci_contract_subject_to_filter
+#                  (ACI 오브젝트: vzRsSubjFiltAtt)
+#
+# Terraform 대응:
+#   resource "aci_contract_subject" "this" {
+#     relation_vz_rs_subj_filt_att = [for f in aci_filter.this : f.id]
+#   }
+#   → Terraform은 Subject 생성 시 Filter 연결을 한 번에 처리
+#   → Ansible은 별도 모듈로 분리 (Subject 생성 후 연결 태스크 추가)
+#
+# 이것이 Terraform vs Ansible의 주요 차이점 중 하나:
+#   Terraform: 리소스 속성에 관계를 선언 (relation_* 속성)
+#   Ansible:   별도 모듈로 관계를 설정 (aci_contract_subject_to_filter)
+# -----------------------------------------------------------------------------
+- name: "Subject-Filter 연결 | vzRsSubjFiltAtt: {{ subject_name }} ↔ {{ item.name }}"
+  cisco.aci.aci_contract_subject_to_filter:
+    host:           "{{ aci_host }}"
+    username:       "{{ aci_username }}"
+    password:       "{{ aci_password }}"
+    validate_certs: "{{ aci_validate_certs }}"
+
+    tenant:   "{{ tenant_name }}"
+    contract: "{{ contract_name }}"
+    subject:  "{{ subject_name }}"
+    filter:   "{{ item.name }}"   # 연결할 Filter 이름
+
+    state: "{{ aci_state }}"
+
+  loop: "{{ filters }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+  register: subj_filter_result
+
+
+# -----------------------------------------------------------------------------
+# Task 6: 생성 결과 출력
+# -----------------------------------------------------------------------------
+- name: "생성 결과 확인 | Policy DN"
+  ansible.builtin.debug:
+    msg:
+      - "Filter   DN : uni/tn-{{ tenant_name }}/flt-{{ item.name }}"
+      - "Contract DN : uni/tn-{{ tenant_name }}/brc-{{ contract_name }}"
+      - "Subject  DN : uni/tn-{{ tenant_name }}/brc-{{ contract_name }}/subj-{{ subject_name }}"
+  loop: "{{ filters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: aci_state == "present"
