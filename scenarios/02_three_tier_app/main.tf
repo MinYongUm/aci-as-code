@@ -77,7 +77,7 @@ module "app_networking" {
   source = "../../terraform/modules/networking"
 
   tenant_dn = module.tenant.tenant_dn
-  vrf_dn    = module.tenant.vrf_dn    # Web과 동일한 VRF
+  vrf_dn    = module.tenant.vrf_dn # Web과 동일한 VRF
 
   bd_name        = var.app_bd_name
   bd_description = var.app_bd_description
@@ -103,7 +103,7 @@ module "db_networking" {
   source = "../../terraform/modules/networking"
 
   tenant_dn = module.tenant.tenant_dn
-  vrf_dn    = module.tenant.vrf_dn    # Web/App과 동일한 VRF
+  vrf_dn    = module.tenant.vrf_dn # Web/App과 동일한 VRF
 
   bd_name        = var.db_bd_name
   bd_description = var.db_bd_description
@@ -148,7 +148,7 @@ module "web_to_app_policy" {
         {
           name        = "tcp-8080"
           ether_t     = "ip"
-          ip_proto    = "tcp"       # policy/main.tf 내부에서 prot 속성으로 매핑됨
+          ip_proto    = "tcp" # policy/main.tf 내부에서 prot 속성으로 매핑됨
           d_from_port = var.web_to_app_port
           d_to_port   = var.web_to_app_port
           description = "Allow TCP 8080 (App Server)"
@@ -209,8 +209,8 @@ module "app_to_db_policy" {
 module "web_epg" {
   source = "../../terraform/modules/epg"
 
-  tenant_dn      = module.tenant.tenant_dn
-  bd_dn          = module.web_networking.bd_dn
+  tenant_dn = module.tenant.tenant_dn
+  bd_dn     = module.web_networking.bd_dn
 
   create_ap      = true
   ap_name        = var.ap_name
@@ -243,8 +243,8 @@ module "web_epg" {
 module "app_epg" {
   source = "../../terraform/modules/epg"
 
-  tenant_dn      = module.tenant.tenant_dn
-  bd_dn          = module.app_networking.bd_dn
+  tenant_dn = module.tenant.tenant_dn
+  bd_dn     = module.app_networking.bd_dn
 
   create_ap      = false
   ap_name        = var.ap_name
@@ -280,8 +280,8 @@ module "app_epg" {
 module "db_epg" {
   source = "../../terraform/modules/epg"
 
-  tenant_dn      = module.tenant.tenant_dn
-  bd_dn          = module.db_networking.bd_dn
+  tenant_dn = module.tenant.tenant_dn
+  bd_dn     = module.db_networking.bd_dn
 
   create_ap      = false
   ap_name        = var.ap_name

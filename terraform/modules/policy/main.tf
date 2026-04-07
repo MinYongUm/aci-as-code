@@ -85,7 +85,7 @@ resource "aci_filter" "this" {
   for_each = var.filters
 
   tenant_dn   = var.tenant_dn
-  name        = each.key            # 맵의 키 = filter 이름
+  name        = each.key # 맵의 키 = filter 이름
   description = each.value.description
 }
 

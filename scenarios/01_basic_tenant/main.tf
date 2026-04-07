@@ -67,17 +67,17 @@ module "policy" {
       entries = [
         {
           name        = "tcp-80"
-          ether_t     = "ip"       # IPv4 트래픽
-          ip_proto    = "tcp"      # TCP 프로토콜
-          d_from_port = "http"     # Named port: 80
-          d_to_port   = "http"     # 단일 포트이므로 from = to
+          ether_t     = "ip"   # IPv4 트래픽
+          ip_proto    = "tcp"  # TCP 프로토콜
+          d_from_port = "http" # Named port: 80
+          d_to_port   = "http" # 단일 포트이므로 from = to
           description = "Allow TCP port 80 (HTTP)"
         },
         {
           name        = "tcp-443"
           ether_t     = "ip"
           ip_proto    = "tcp"
-          d_from_port = "https"    # Named port: 443
+          d_from_port = "https" # Named port: 443
           d_to_port   = "https"
           description = "Allow TCP port 443 (HTTPS)"
         }
@@ -96,7 +96,7 @@ module "networking" {
   source = "../../terraform/modules/networking"
 
   tenant_dn = module.tenant.tenant_dn
-  vrf_dn    = module.tenant.vrf_dn   # BD를 VRF에 연결
+  vrf_dn    = module.tenant.vrf_dn # BD를 VRF에 연결
 
   bd_name        = var.bd_name
   bd_description = var.bd_description
@@ -114,7 +114,7 @@ module "epg" {
   source = "../../terraform/modules/epg"
 
   tenant_dn = module.tenant.tenant_dn
-  bd_dn     = module.networking.bd_dn  # EPG를 BD에 연결
+  bd_dn     = module.networking.bd_dn # EPG를 BD에 연결
 
   ap_name         = var.ap_name
   ap_description  = var.ap_description
@@ -128,7 +128,7 @@ module "epg" {
   # (단일 EPG 시나리오 — Scenario 02에서 Provider/Consumer가 분리됨)
   contracts = [
     {
-      contract_dn   = module.policy.contract_dn  # policy 모듈 output 참조
+      contract_dn   = module.policy.contract_dn # policy 모듈 output 참조
       contract_type = "provider"
     },
     {

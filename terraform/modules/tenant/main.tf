@@ -42,7 +42,7 @@ terraform {
 resource "aci_tenant" "this" {
   # name: APIC에 생성될 실제 Tenant 이름
   # var.tenant_name → variables.tf에서 정의한 입력 변수
-  name        = var.tenant_name
+  name = var.tenant_name
 
   # description: APIC GUI의 Description 필드에 표시됨
   description = var.tenant_description
