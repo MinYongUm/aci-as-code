@@ -1,0 +1,17 @@
+---
+# =============================================================================
+# Scenario 02 — Three-Tier App
+# 파일: group_vars/all/vault.yml
+# 역할: 민감 정보(APIC 비밀번호)를 분리 관리
+#
+# 보안 규칙:
+#   이 파일은 .gitignore에 등록 (GitHub에 절대 올리지 않음)
+#   운영 환경에서는 ansible-vault encrypt 로 암호화 권장:
+#     ansible-vault encrypt group_vars/all/vault.yml
+#
+# group_vars/all/ 폴더 구조 주의:
+#   올바름: group_vars/all/vault.yml   → all 그룹에 로드됨
+#   잘못됨: group_vars/vault.yml       → "vault" 그룹으로 인식됨 (all에 미적용)
+# =============================================================================
+
+aci_password: "!v3G@!4@Y"    # DevNet Always-On Sandbox 비밀번호

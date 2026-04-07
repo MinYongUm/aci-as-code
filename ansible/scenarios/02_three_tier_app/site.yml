@@ -1,0 +1,42 @@
+---
+# =============================================================================
+# Scenario 02 — Three-Tier App
+# 파일: site.yml
+# 역할: 4개 Role을 순서대로 호출하여 3계층 앱 ACI 오브젝트를 프로비저닝한다
+#
+# 실행 순서 (ACI 오브젝트 의존성 기반):
+#   1. aci_tenant     → Tenant + VRF 생성 (모든 오브젝트의 기반)
+#   2. aci_networking → BD + Subnet 3개 생성 (EPG 연결 전에 BD 존재해야 함)
+#   3. aci_policy     → Filter + Contract 생성 (EPG 바인딩 전에 Contract 존재해야 함)
+#   4. aci_epg        → AP + EPG + Contract 바인딩 (위 3개 완료 후)
+#
+# Terraform vs Ansible 순서 제어 방식:
+#   Terraform: 리소스 참조(module.tenant.tenant_dn)로 의존성 그래프 자동 생성
+#   Ansible:   roles 나열 순서로 직접 제어 (명시적, 절차적)
+#
+# 삭제 실행:
+#   ansible-playbook -i inventory.yml site.yml -e "aci_state=absent"
+#   aci_state=absent 변수 주입 시 모든 태스크가 삭제 모드로 전환
+#   cisco.aci 모듈의 멱등성으로 생성 순서와 동일하게 실행해도 안전하게 삭제됨
+# =============================================================================
+
+- name: "ACI Scenario 02 — Three-Tier Application"
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    # 1단계: Tenant + VRF
+    - role: aci_tenant
+      tags: ["tenant", "always"]
+
+    # 2단계: Bridge Domain + Subnet (web-bd / app-bd / db-bd)
+    - role: aci_networking
+      tags: ["networking", "bd"]
+
+    # 3단계: Filter + Contract (filter-app / filter-db / web-to-app / app-to-db)
+    - role: aci_policy
+      tags: ["policy", "contract"]
+
+    # 4단계: Application Profile + EPG + Contract 바인딩
+    - role: aci_epg
+      tags: ["epg"]

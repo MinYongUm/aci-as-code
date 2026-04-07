@@ -1,0 +1,205 @@
+---
+# =============================================================================
+# Scenario 02 — Three-Tier App
+# 파일: group_vars/all/main.yml
+# 역할: 이 시나리오에서 사용하는 모든 ACI 오브젝트 변수를 정의한다
+#
+# 민감 정보(aci_password)는 group_vars/all/vault.yml에서 분리 관리
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# [1] APIC 접속 정보
+# aci_password → vault.yml에서 주입 (이 파일에는 절대 입력 금지)
+# -----------------------------------------------------------------------------
+aci_host:           "sandboxapicdc.cisco.com"
+aci_username:       "admin"
+aci_validate_certs: false   # Sandbox 자체 서명 인증서 → false
+
+# aci_state: present(생성) | absent(삭제)
+# 삭제 시: ansible-playbook ... -e "aci_state=absent" 로 오버라이드
+aci_state: "present"
+
+
+# -----------------------------------------------------------------------------
+# [2] Tenant / VRF
+# Scenario 02는 별도 Tenant 사용 (Scenario 01의 demo-tenant와 충돌 방지)
+# -----------------------------------------------------------------------------
+tenant_name:        "three-tier-tenant"
+tenant_description: "Scenario 02 - Three-Tier Application"
+
+vrf_name:        "prod-vrf"
+vrf_description: "Production VRF"
+vrf_enforcement: "enforced"   # enforced | unenforced
+
+
+# -----------------------------------------------------------------------------
+# [3] Bridge Domain / Subnet
+# 각 계층(Web/App/DB)이 독립된 BD와 Subnet을 사용
+# L3 격리: 계층 간 통신은 반드시 Contract를 통과해야 함
+#
+# enable_routing: yes → BD가 L3 게이트웨이 역할 (SVI 역할)
+# arp_flooding:   no  → ARP Proxy 사용 (enable_routing=yes 환경 권장)
+#
+# Terraform vs Ansible 차이:
+#   Terraform: ip = "10.10.1.1/24" (CIDR 통합 입력)
+#   Ansible:   gateway = "10.10.1.1" + mask = "24" (분리 입력)
+# -----------------------------------------------------------------------------
+bridge_domains:
+  - name:           "web-bd"
+    description:    "Web Tier Bridge Domain"
+    vrf:            "prod-vrf"
+    enable_routing: "yes"
+    arp_flooding:   "no"
+    subnets:
+      - gateway:     "10.10.1.1"
+        mask:        "24"
+        scope:       "private"
+        description: "Web Subnet GW"
+
+  - name:           "app-bd"
+    description:    "Application Tier Bridge Domain"
+    vrf:            "prod-vrf"
+    enable_routing: "yes"
+    arp_flooding:   "no"
+    subnets:
+      - gateway:     "10.10.2.1"
+        mask:        "24"
+        scope:       "private"
+        description: "App Subnet GW"
+
+  - name:           "db-bd"
+    description:    "Database Tier Bridge Domain"
+    vrf:            "prod-vrf"
+    enable_routing: "yes"
+    arp_flooding:   "no"
+    subnets:
+      - gateway:     "10.10.3.1"
+        mask:        "24"
+        scope:       "private"
+        description: "DB Subnet GW"
+
+
+# -----------------------------------------------------------------------------
+# [4] Filter / Filter Entry
+# Scenario 02는 계층 간 통신 용도에 따라 Filter를 분리
+#
+# filter-app: Web → App 통신 허용 (TCP 8080, App Server 포트)
+# filter-db:  App → DB 통신 허용  (TCP 5432, PostgreSQL 포트)
+#
+# Terraform vs Ansible 속성명 차이:
+#   Terraform: prot           → Ansible: ip_protocol
+#   Terraform: d_from_port    → Ansible: dst_port_start
+#   Terraform: d_to_port      → Ansible: dst_port_end
+# -----------------------------------------------------------------------------
+filters:
+  - name:        "filter-app"
+    description: "App Server Filter"
+    entries:
+      - name:           "tcp-8080"
+        description:    "Allow TCP 8080 (App Server)"
+        ether_type:     "ip"
+        ip_protocol:    "tcp"
+        dst_port_start: "8080"
+        dst_port_end:   "8080"
+
+  - name:        "filter-db"
+    description: "Database Filter"
+    entries:
+      - name:           "tcp-5432"
+        description:    "Allow TCP 5432 (PostgreSQL)"
+        ether_type:     "ip"
+        ip_protocol:    "tcp"
+        dst_port_start: "5432"
+        dst_port_end:   "5432"
+
+
+# -----------------------------------------------------------------------------
+# [5] Contract / Subject
+# Scenario 02: 계층 간 트래픽 제어를 위해 Contract 2개
+#
+# web-to-app: Web EPG(consumer) → App EPG(provider) | filter-app 적용
+# app-to-db:  App EPG(consumer) → DB EPG(provider)  | filter-db 적용
+#
+# scope: tenant → 동일 Tenant 내 EPG 간 적용 (이 시나리오에 적합)
+# -----------------------------------------------------------------------------
+contracts:
+  - name:               "web-to-app"
+    description:        "Web to App traffic (TCP 8080)"
+    scope:              "tenant"
+    subject:            "app-subj"
+    subject_description: "App Server Subject"
+    filter:             "filter-app"
+
+  - name:               "app-to-db"
+    description:        "App to DB traffic (TCP 5432)"
+    scope:              "tenant"
+    subject:            "db-subj"
+    subject_description: "Database Subject"
+    filter:             "filter-db"
+
+
+# -----------------------------------------------------------------------------
+# [6] Application Profile / EPG
+# Scenario 02: 3계층 앱 구조 (Web / App / DB)
+# 각 계층이 독립된 EPG와 BD를 사용
+# -----------------------------------------------------------------------------
+application_profiles:
+  - name:        "three-tier-ap"
+    description: "Three-Tier Application Profile"
+    epgs:
+      - name:        "web-epg"
+        description: "Web Tier EPG"
+        bd:          "web-bd"
+
+      - name:        "app-epg"
+        description: "Application Tier EPG"
+        bd:          "app-bd"
+
+      - name:        "db-epg"
+        description: "Database Tier EPG"
+        bd:          "db-bd"
+
+
+# -----------------------------------------------------------------------------
+# [7] EPG-Contract 바인딩 (플랫 리스트)
+#
+# 설계 결정: 플랫 리스트로 분리한 이유
+#   Ansible은 중첩 루프를 직접 지원하지 않음
+#   AP → EPG → contracts의 3단계 중첩을 subelements로 처리하면
+#   가독성이 심각하게 저하됨 (set_fact + 복잡한 Jinja2 필요)
+#   → 명시적 플랫 리스트: 어떤 EPG가 어떤 Contract를 어떤 방향으로 사용하는지
+#     한눈에 파악 가능 (운영 엔지니어 관점에서 더 직관적)
+#
+# Contract 방향 (ACI 핵심 개념):
+#   provider → 서비스를 제공하는 EPG (서버 역할)
+#              Contract에 정의된 트래픽을 "받는" 쪽
+#   consumer → 서비스를 소비하는 EPG (클라이언트 역할)
+#              Contract에 정의된 트래픽을 "보내는" 쪽
+#
+# 트래픽 흐름:
+#   web-epg(consumer) → [web-to-app: TCP 8080] → app-epg(provider)
+#   app-epg(consumer) → [app-to-db:  TCP 5432] → db-epg(provider)
+# -----------------------------------------------------------------------------
+epg_contract_bindings:
+  # web-to-app Contract 바인딩
+  - ap:       "three-tier-ap"
+    epg:      "web-epg"
+    contract: "web-to-app"
+    type:     "consumer"      # web-epg: 서비스를 소비 (App 서버에 요청 보냄)
+
+  - ap:       "three-tier-ap"
+    epg:      "app-epg"
+    contract: "web-to-app"
+    type:     "provider"      # app-epg: 서비스를 제공 (Web으로부터 요청 받음)
+
+  # app-to-db Contract 바인딩
+  - ap:       "three-tier-ap"
+    epg:      "app-epg"
+    contract: "app-to-db"
+    type:     "consumer"      # app-epg: 서비스를 소비 (DB에 쿼리 보냄)
+
+  - ap:       "three-tier-ap"
+    epg:      "db-epg"
+    contract: "app-to-db"
+    type:     "provider"      # db-epg: 서비스를 제공 (App으로부터 쿼리 받음)

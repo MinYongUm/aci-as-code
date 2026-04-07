@@ -2,140 +2,127 @@
 # =============================================================================
 # Role: aci_networking
 # 파일: tasks/main.yml
-# 역할: Bridge Domain(BD)과 Subnet을 생성하고 VRF에 연결한다
+# 역할: Bridge Domain(BD)과 Subnet을 생성/삭제한다
 #
 # ACI 오브젝트:
-#   VRF (fvCtx)              → aci_tenant Role에서 생성 (전달받음)
-#   └── Bridge Domain (fvBD) → L2 브로드캐스트 도메인 (VLAN과 유사)
-#       └── Subnet (fvSubnet)→ BD의 게이트웨이 IP / 라우팅 범위
+#   Bridge Domain (fvBD)  → uni/tn-{tenant}/BD-{name}
+#   Subnet        (fvSubnet) → uni/tn-{tenant}/BD-{name}/subnet-[{gw}/{mask}]
 #
-# DN 경로:
-#   BD     → uni/tn-{tenant}/BD-{name}
-#   Subnet → uni/tn-{tenant}/BD-{bd}/subnet-[{gateway}/{mask}]
+# 변수 구조 (group_vars/all/main.yml):
+#   bridge_domains: list(object)         ← 단일/복수 BD 모두 처리
+#     - name, description, vrf
+#       enable_routing, arp_flooding
+#       subnets: list(object)
+#         - gateway, mask, scope, description
+#
+# Scenario 01: bridge_domains 1개 (web-bd)
+# Scenario 02: bridge_domains 3개 (web-bd / app-bd / db-bd)
 #
 # Terraform 모듈 비교:
-#   terraform/modules/networking/main.tf 의 aci_bridge_domain + aci_subnet
-#
-# 실무 비유:
-#   BD     = ACI에서의 VLAN (L2 영역)
-#   Subnet = 그 VLAN의 게이트웨이 IP + 서브넷 마스크 (ACI의 SVI)
+#   terraform/modules/networking/main.tf
+#   aci_bridge_domain + aci_subnet
 # =============================================================================
 
 
 # -----------------------------------------------------------------------------
-# Task 1: Bridge Domain 생성
-# Cisco ACI 모듈: cisco.aci.aci_bd (ACI 오브젝트: fvBD)
+# Task 1: Bridge Domain 생성/삭제
+# cisco.aci.aci_bd → ACI 오브젝트: fvBD
 #
 # Terraform 대응:
 #   resource "aci_bridge_domain" "this" {
 #     parent_dn          = var.tenant_dn
 #     name               = var.bd_name
-#     relation_fv_rs_ctx = var.vrf_dn   ← VRF 연결
+#     relation_fv_rs_ctx = var.vrf_dn   ← 전체 VRF DN 입력
 #     unicast_route      = var.unicast_route
 #     arp_flood          = var.arp_flood
 #   }
 #
 # 핵심 차이:
-#   Terraform: var.vrf_dn (전체 DN 문자열) 으로 VRF 연결
-#   Ansible:   vrf: "{{ vrf_name }}" (이름만 입력) → 모듈이 DN 자동 생성
+#   Terraform: var.vrf_dn (uni/tn-.../ctx-...) 전체 DN 입력
+#   Ansible:   vrf: "{{ item.vrf }}" 이름만 입력 → 모듈이 DN 자동 생성
 # -----------------------------------------------------------------------------
-- name: "Bridge Domain 생성 | fvBD: {{ bd_name }} (VRF: {{ vrf_name }})"
+- name: "Manage Bridge Domain | {{ item.name }}"
   cisco.aci.aci_bd:
     host:           "{{ aci_host }}"
     username:       "{{ aci_username }}"
     password:       "{{ aci_password }}"
     validate_certs: "{{ aci_validate_certs }}"
-
-    # BD가 속할 Tenant
-    tenant: "{{ tenant_name }}"
-
-    # BD 설정
-    bd:          "{{ bd_name }}"
-    description: "{{ bd_description }}"
-
-    # VRF 연결 (BD는 반드시 하나의 VRF에 속해야 함)
-    # Terraform: relation_fv_rs_ctx = var.vrf_dn
-    # Ansible:   vrf = vrf_name (모듈이 DN 자동 처리)
-    vrf: "{{ vrf_name }}"
-
+    tenant:         "{{ tenant_name }}"
+    bd:             "{{ item.name }}"
+    description:    "{{ item.description | default('') }}"
+    # VRF 연결: 이름만 입력 → 모듈이 uni/tn-{tenant}/ctx-{vrf} DN 자동 생성
+    vrf:            "{{ item.vrf }}"
     # enable_routing: L3 유니캐스트 라우팅 활성화
-    # Terraform: unicast_route = "yes"
-    # Ansible:   enable_routing: true (bool 타입)
-    enable_routing: "{{ bd_enable_routing }}"
-
+    #   yes → BD가 게이트웨이 역할 (Terraform: unicast_route = "yes")
+    #   no  → L2 only 모드
+    enable_routing: "{{ item.enable_routing | default('yes') }}"
     # arp_flooding: ARP 플러딩 vs ARP Proxy
-    # Terraform: arp_flood = "no"
-    # Ansible:   arp_flooding: false (bool 타입)
-    arp_flooding: "{{ bd_arp_flooding }}"
+    #   no  → ARP Proxy 사용 권장 (enable_routing=yes 환경)
+    #   yes → 전통적인 ARP 플러딩 (Terraform: arp_flood = "no")
+    arp_flooding:   "{{ item.arp_flooding | default('no') }}"
+    state:          "{{ aci_state }}"
 
-    state: "{{ aci_state }}"
-
-  register: bd_result
+  loop: "{{ bridge_domains }}"
+  loop_control:
+    label: "{{ tenant_name }} / {{ item.name }}"
 
 
 # -----------------------------------------------------------------------------
-# Task 2: Subnet 생성 (반복)
-# Cisco ACI 모듈: cisco.aci.aci_bd_subnet (ACI 오브젝트: fvSubnet)
+# Task 2: Subnet 생성/삭제
+# cisco.aci.aci_bd_subnet → ACI 오브젝트: fvSubnet
+#
+# subelements 필터 동작 원리:
+#   입력: bridge_domains = [
+#           { name: "web-bd", subnets: [{gateway: "10.10.1.1", mask: "24"}] },
+#           { name: "app-bd", subnets: [{gateway: "10.10.2.1", mask: "24"}] }
+#         ]
+#   출력: [
+#           (web-bd 오브젝트, {gateway: "10.10.1.1", mask: "24"}),
+#           (app-bd 오브젝트, {gateway: "10.10.2.1", mask: "24"})
+#         ]
+#   → item.0 = BD 오브젝트, item.1 = Subnet 오브젝트
 #
 # Terraform 대응:
 #   resource "aci_subnet" "this" {
 #     for_each  = { for s in var.subnets : s.ip => s }
-#     parent_dn = aci_bridge_domain.this.id
-#     ip        = each.value.ip   ← "10.10.1.1/24" (gateway + mask 합산)
-#     scope     = each.value.scope
+#     ip        = each.value.ip    ← "10.10.1.1/24" (gateway+mask 합산)
 #   }
-#
-# Ansible vs Terraform 루프 방식:
-#   Terraform: for_each + 맵 키로 리소스 개별 추적 (tfstate에 키로 저장)
-#   Ansible:   loop (with_items 최신 버전) → 순서대로 순차 실행
-#
-# Ansible에서의 BD 순서 의존성:
-#   Terraform: aci_subnet.parent_dn → aci_bridge_domain.this.id 참조 (자동)
-#   Ansible:   Task 2를 Task 1 다음에 배치 → 순서 명시 (절차적)
+# Ansible:
+#   gateway + mask 분리 입력 (모듈이 내부적으로 CIDR 합산 처리)
 # -----------------------------------------------------------------------------
-- name: "Subnet 생성 | fvSubnet: {{ item.gateway }}/{{ item.mask }} (BD: {{ bd_name }})"
+- name: "Manage Subnet | {{ item.0.name }} - {{ item.1.gateway }}/{{ item.1.mask }}"
   cisco.aci.aci_bd_subnet:
     host:           "{{ aci_host }}"
     username:       "{{ aci_username }}"
     password:       "{{ aci_password }}"
     validate_certs: "{{ aci_validate_certs }}"
-
-    tenant: "{{ tenant_name }}"
-    bd:     "{{ bd_name }}"
-
-    # Terraform과의 차이:
-    #   Terraform: ip = "10.10.1.1/24" (게이트웨이 IP + prefix 합산 문자열)
-    #   Ansible:   gateway + mask 분리 입력 (모듈이 내부적으로 합산 처리)
-    gateway: "{{ item.gateway }}"
-    mask:    "{{ item.mask }}"
-
+    tenant:         "{{ tenant_name }}"
+    bd:             "{{ item.0.name }}"
+    # Terraform: ip = "10.10.1.1/24" (통합 입력)
+    # Ansible:   gateway + mask 분리 입력
+    gateway:        "{{ item.1.gateway }}"
+    mask:           "{{ item.1.mask }}"
+    description:    "{{ item.1.description | default('') }}"
     # scope: Subnet 사용 범위
-    #   private → Tenant 내부 전용 (L3Out 미사용)
-    #   public  → L3Out으로 외부 라우터에 광고
-    #   shared  → 다른 Tenant VRF와 공유
-    scope:       "{{ item.scope }}"
-    description: "{{ item.description }}"
+    #   private → Tenant 내부 전용  public → L3Out 광고  shared → VRF 간 공유
+    scope:          "{{ item.1.scope | default('private') }}"
+    state:          "{{ aci_state }}"
 
-    state: "{{ aci_state }}"
-
-  # loop: group_vars/all.yml의 bd_subnets 리스트를 순회
-  # Terraform의 for_each와 기능상 동일, 구현 방식은 절차적
-  loop: "{{ bd_subnets }}"
+  # subelements: Terraform의 for_each + 중첩 맵 펼치기와 동일한 역할
+  loop: "{{ bridge_domains | subelements('subnets') }}"
   loop_control:
-    label: "{{ item.gateway }}/{{ item.mask }}"  # 로그 출력 간소화
-
-  register: subnet_result
+    label: "{{ item.0.name }} - {{ item.1.gateway }}/{{ item.1.mask }}"
 
 
 # -----------------------------------------------------------------------------
 # Task 3: 생성 결과 출력
 # -----------------------------------------------------------------------------
-- name: "생성 결과 확인 | Bridge Domain DN"
+- name: "Debug | Bridge Domain / Subnet DN"
   ansible.builtin.debug:
     msg:
-      - "BD     DN : uni/tn-{{ tenant_name }}/BD-{{ bd_name }}"
-      - "Subnet DN : uni/tn-{{ tenant_name }}/BD-{{ bd_name }}/subnet-[{{ item.gateway }}/{{ item.mask }}]"
-  loop: "{{ bd_subnets }}"
+      - "BD     DN : uni/tn-{{ tenant_name }}/BD-{{ item.0.name }}"
+      - "Subnet DN : uni/tn-{{ tenant_name }}/BD-{{ item.0.name }}/subnet-[{{ item.1.gateway }}/{{ item.1.mask }}]"
+  loop: "{{ bridge_domains | subelements('subnets') }}"
   loop_control:
-    label: "{{ item.gateway }}/{{ item.mask }}"
+    label: "{{ item.0.name }}"
   when: aci_state == "present"

@@ -1,0 +1,19 @@
+---
+# =============================================================================
+# Scenario 02 — Three-Tier App
+# 파일: inventory.yml
+# 역할: APIC 접속 대상 정의
+#
+# cisco.aci 컬렉션 특징:
+#   - SSH가 아닌 HTTPS REST API로 APIC에 직접 통신
+#   - 실제 연결 대상은 inventory의 호스트가 아닌 group_vars의 aci_host
+#   - localhost를 앵커로 사용하는 것이 관행
+# =============================================================================
+
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      # ansible_python_interpreter: 시스템 Python 경로 명시
+      # Ubuntu 24.04 기본값 사용
+      ansible_python_interpreter: /usr/bin/python3
